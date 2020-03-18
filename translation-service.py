@@ -1,5 +1,6 @@
 import tornado.ioloop
 import tornado.web
+import base64
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -16,14 +17,15 @@ def load_public_key():
     print("Loading public key")
     with open("test_rsa.pub", "rb") as key_file:
         public_key_bytes = key_file.read()
-        return serialization.load_pem_public_key(public_key_bytes, default_backend())
+        #return serialization.load_pem_public_key(public_key_bytes, default_backend())
+        return serialization.load_ssh_public_key(public_key_bytes, default_backend())
 
 def sign_message(message, private_key):
     print("Signing message")
     return private_key.sign(
         message,
-        padding.PSS(mgf=padding.MGF1(hashes.SHA256), salt_length=padding.PSS.MAX_LENGTH),
-        hashes.SHA256
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256()
     )
 
 def verify_message(message, signature, public_key):
@@ -31,8 +33,8 @@ def verify_message(message, signature, public_key):
     public_key.verify(
         signature,
         message,
-        padding.PSS(mgf=padding.MGF1(hashes.SHA256), salt_length=padding.PSS.MAX_LENGTH),
-        hashes.SHA256
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256()
     )
 
 def log_message_details(request):
@@ -48,16 +50,19 @@ class Sign(tornado.web.RequestHandler):
     private_key = load_private_key()
 
     def post(self):
-        log_message_details(request)
-        signature = sign_message(request.body, private_key)
+        log_message_details(self.request)
+        signature = sign_message(self.request.body, self.private_key)
+        signature = base64.urlsafe_b64encode(signature)
         self.write(signature)
 
 class Verify(tornado.web.RequestHandler):
     public_key = load_public_key()
 
     def post(self):
-        log_message_details(request)
-        verify_message(request.body, request.headers['signature'], public_key)
+        log_message_details(self.request)
+        signature = self.request.headers['signature']
+        signature = base64.urlsafe_b64decode(signature)
+        verify_message(self.request.body, signature, self.public_key)
         self.write("Signature verified successfully")
 
 def make_app():
@@ -65,7 +70,6 @@ def make_app():
         (r"/", MainHandler),
         (r"/sign", Sign),
         (r"/verify", Verify)
-
     ])
 
 if __name__ == "__main__":
