@@ -1,11 +1,13 @@
 import tornado.ioloop
 import tornado.web
 import base64
+import datetime
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography import x509
 
 def load_private_key():
     print("Loading private key")
@@ -17,8 +19,15 @@ def load_public_key():
     print("Loading public key")
     with open("test_rsa.pub", "rb") as key_file:
         public_key_bytes = key_file.read()
-        #return serialization.load_pem_public_key(public_key_bytes, default_backend())
         return serialization.load_ssh_public_key(public_key_bytes, default_backend())
+
+def load_public_key_from_cert():
+    print("Loading public key from certificate")
+    with open("test_cert.pem", "rb") as cert_file:
+        cert_bytes = cert_file.read()
+        cert = x509.load_pem_x509_certificate(cert_bytes, default_backend())
+        #TODO - Check that we trust the certificate
+        return cert.public_key()
 
 def sign_message(message, private_key):
     print("Signing message")
@@ -37,6 +46,25 @@ def verify_message(message, signature, public_key):
         hashes.SHA256()
     )
 
+def create_self_signed_cert(private_key):
+    print("Creating self-signed certificate")
+    name = x509.Name([
+        x509.NameAttribute(x509.NameOID.COUNTRY_NAME, "GB"),
+        x509.NameAttribute(x509.NameOID.STATE_OR_PROVINCE_NAME, "West Yorkshire"),
+        x509.NameAttribute(x509.NameOID.LOCALITY_NAME, "Leeds"),
+        x509.NameAttribute(x509.NameOID.ORGANIZATION_NAME, "Infinity Works")
+    ])
+    cert = x509.CertificateBuilder(
+        name,
+        name,
+        private_key.public_key(),
+        x509.random_serial_number(),
+        datetime.datetime.utcnow(),
+        datetime.datetime.utcnow() + datetime.timedelta(days=1000)
+    ).sign(private_key, hashes.SHA256(), default_backend())
+    with open("test_cert.pem", "wb") as cert_file:
+        cert_file.write(cert.public_bytes(serialization.Encoding.PEM))
+
 def log_message_details(request):
     print(request.headers)
     print(request.body)
@@ -53,10 +81,12 @@ class Sign(tornado.web.RequestHandler):
         log_message_details(self.request)
         signature = sign_message(self.request.body, self.private_key)
         signature = base64.urlsafe_b64encode(signature)
-        self.write(signature)
+        self.add_header("signature", signature)
+        self.write(self.request.body)
 
 class Verify(tornado.web.RequestHandler):
-    public_key = load_public_key()
+    #public_key = load_public_key()
+    public_key = load_public_key_from_cert()
 
     def post(self):
         log_message_details(self.request)
